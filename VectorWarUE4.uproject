@@ -12,5 +12,11 @@
 				"Engine"
 			]
 		}
+	],
+	"Plugins": [
+		{
+			"Name": "GGPOUE4",
+			"Enabled": true
+		}
 	]
 }
