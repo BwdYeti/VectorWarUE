@@ -26,12 +26,19 @@ void AVWGameStateBase::BeginPlay()
     {
         // Get the network addresses
         NetworkAddresses = GgpoGameInstance->NetworkAddresses;
-        NumPlayers = NetworkAddresses->NumPlayers();
+        NumPlayers = NetworkAddresses->GetNumPlayers();
         // Reset the game instance network addresses
         GgpoGameInstance->NetworkAddresses = nullptr;
     }
 
-    bSessionStarted = TryStartGGPOPlayerSession(NumPlayers, NetworkAddresses);
+    if (NetworkAddresses->IsSpectator())
+    {
+        bSessionStarted = TryStartGGPOSpectatorSession(NumPlayers, NetworkAddresses);
+    }
+    else
+    {
+        bSessionStarted = TryStartGGPOPlayerSession(NumPlayers, NetworkAddresses);
+    }
 
     if (bSessionStarted)
     {
@@ -311,13 +318,12 @@ bool AVWGameStateBase::TryStartGGPOPlayerSession(
     int32 NumPlayers,
     const UGGPONetwork* NetworkAddresses)
 {
-    int32 Offset = 0;
     GGPOPlayer Players[GGPO_MAX_SPECTATORS + GGPO_MAX_PLAYERS];
     int32 NumSpectators = 0;
 
     uint16 LocalPort;
 
-    // If there are no 
+    // If there are no remote players, this is a local session
     if (NetworkAddresses == nullptr)
     {
         Players[0].size = sizeof(Players[0]);
@@ -329,37 +335,37 @@ bool AVWGameStateBase::TryStartGGPOPlayerSession(
     }
     else
     {
-        if (NumPlayers > NetworkAddresses->NumPlayers())
+        if (NumPlayers > NetworkAddresses->NumAddresses())
             return false;
 
         LocalPort = NetworkAddresses->GetLocalPort();
 
-        int32 i;
-        for (i = 0; i < NumPlayers; i++)
+        for (int32 i = 0; i < NumPlayers; i++)
         {
-            Offset++;
+            auto& Player = Players[i];
 
-            Players[i].size = sizeof(Players[i]);
-            Players[i].player_num = i + 1;
+            Player.size = sizeof(GGPOPlayer);
+            Player.player_num = i + 1;
             // The local player
-            if (i == NetworkAddresses->GetPlayerIndex()) {
-                Players[i].type = EGGPOPlayerType::LOCAL;
-                continue;
+            if (i == NetworkAddresses->GetLocalPlayerIndex())
+            {
+                Player.type = EGGPOPlayerType::LOCAL;
             }
-
-            Players[i].type = EGGPOPlayerType::REMOTE;
-            Players[i].u.remote.port = (uint16)NetworkAddresses->GetAddress(i)->GetPort();
-            NetworkAddresses->GetAddress(i)->GetIpAddress(Players[i].u.remote.ip_address);
+            else
+            {
+                Player.type = EGGPOPlayerType::REMOTE;
+                Player.u.remote.port = (uint16)NetworkAddresses->GetAddress(i)->GetPort();
+                NetworkAddresses->GetAddress(i)->GetIpAddress(Player.u.remote.ip_address);
+            }
         }
-        // these are spectators...
-        while (Offset < NetworkAddresses->NumPlayers()) {
-            Offset++;
+        for (int32 i = 0; i < NetworkAddresses->NumSpectators(); i++)
+        {
+            auto& Spectator = Players[NumPlayers + i];
 
-            Players[i].type = EGGPOPlayerType::SPECTATOR;
-            Players[i].u.remote.port = (uint16)NetworkAddresses->GetAddress(i)->GetPort();
-            NetworkAddresses->GetAddress(i)->GetIpAddress(Players[i].u.remote.ip_address);
+            Spectator.type = EGGPOPlayerType::SPECTATOR;
+            Spectator.u.remote.port = (uint16)NetworkAddresses->GetSpectator(i)->GetPort();
+            NetworkAddresses->GetSpectator(i)->GetIpAddress(Spectator.u.remote.ip_address);
 
-            i++;
             NumSpectators++;
         }
     }
@@ -372,20 +378,15 @@ bool AVWGameStateBase::TryStartGGPOPlayerSession(
 }
 
 bool AVWGameStateBase::TryStartGGPOSpectatorSession(
-    const uint16 LocalPort,
     const int32 NumPlayers,
-    wchar_t* HostParameter)
+    const UGGPONetwork* NetworkAddresses)
 {
-    int32 Offset = 0;
-    wchar_t WideIpBuffer[128];
-    uint32 WideIpBufferSize = (uint32)ARRAYSIZE(WideIpBuffer);
+    char HostIp[32];
+    auto Host = NetworkAddresses->GetAddress(0);
+    uint16 HostPort = Host->GetPort();
+    Host->GetIpAddress(HostIp);
 
-    char HostIp[128];
-    uint16 HostPort;
-    if (swscanf_s(HostParameter, L"%[^:]:%hu", WideIpBuffer, WideIpBufferSize, &HostPort) != 2) {
-        return 1;
-    }
-    wcstombs_s(nullptr, HostIp, ARRAYSIZE(HostIp), WideIpBuffer, _TRUNCATE);
+    uint16 LocalPort = NetworkAddresses->GetLocalPort();
 
     VectorWar_InitSpectator(LocalPort, NumPlayers, HostIp, HostPort);
 
@@ -417,8 +418,9 @@ void AVWGameStateBase::VectorWar_Init(uint16 localport, int32 num_players, GGPOP
     GGPONet::ggpo_set_disconnect_timeout(ggpo, 3000);
     GGPONet::ggpo_set_disconnect_notify_start(ggpo, 1000);
 
-    int i;
-    for (i = 0; i < num_players + num_spectators; i++) {
+    // Players
+    for (int i = 0; i < num_players; i++)
+    {
         GGPOPlayerHandle handle;
         result = GGPONet::ggpo_add_player(ggpo, players + i, &handle);
         ngs.players[i].handle = handle;
@@ -432,6 +434,12 @@ void AVWGameStateBase::VectorWar_Init(uint16 localport, int32 num_players, GGPOP
         else {
             ngs.players[i].connect_progress = 0;
         }
+    }
+    // Spectators
+    for (int i = num_players; i < num_players + num_spectators; i++)
+    {
+        GGPOPlayerHandle handle;
+        result = GGPONet::ggpo_add_player(ggpo, players + i, &handle);
     }
 
     GGPONet::ggpo_try_synchronize_local(ggpo);
@@ -448,6 +456,11 @@ void AVWGameStateBase::VectorWar_InitSpectator(uint16 localport, int32 num_playe
     GGPOSessionCallbacks cb = CreateCallbacks();
 
     result = GGPONet::ggpo_start_spectating(&ggpo, &cb, "vectorwar", num_players, sizeof(int), localport, host_ip, host_port);
+
+    for (int i = 0; i < num_players; i++) {
+        ngs.players[i].type = EGGPOPlayerType::REMOTE;
+        ngs.players[i].connect_progress = 0;
+    }
 }
 
 GGPOSessionCallbacks AVWGameStateBase::CreateCallbacks()
