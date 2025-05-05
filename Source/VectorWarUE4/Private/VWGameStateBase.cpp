@@ -66,16 +66,17 @@ void AVWGameStateBase::Tick(float DeltaSeconds)
 
     ElapsedTime += DeltaSeconds;
 
-    while (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE)) {
-        TranslateMessage(&msg);
-        DispatchMessage(&msg);
-        if (msg.message == WM_QUIT) { }
-    }
-    int32 IdleMs = (int32)(ONE_FRAME - (int32)(ElapsedTime * 1000));
+    // Milliseconds of idle time before the next game state tick
+    // Less than or equal to zero if the update is happening during this tick
+    int32 IdleMs = (int32)((ONE_FRAME - ElapsedTime) * 1000);
+    // Process GGPO background actions (synching, etc)
     VectorWar_Idle(FMath::Max(0, IdleMs - 1));
+    // If the elasped time is at least one frame
     while (ElapsedTime >= ONE_FRAME) {
+        // Tick one frame of gameplay
         TickGameState();
 
+        // Then reduce the elapsed time
         ElapsedTime -= ONE_FRAME;
     }
 }
@@ -295,6 +296,7 @@ void AVWGameStateBase::VectorWar_DisconnectPlayer(int32 player)
 
 TArray<FGGPONetworkStats> AVWGameStateBase::VectorWar_GetNetworkStats()
 {
+    // Get the handles for the remote players
     GGPOPlayerHandle RemoteHandles[MAX_PLAYERS];
     int Count = 0;
     for (int i = 0; i < ngs.num_players; i++) {
@@ -303,6 +305,7 @@ TArray<FGGPONetworkStats> AVWGameStateBase::VectorWar_GetNetworkStats()
         }
     }
 
+    // Pull network stats for only the remote players
     TArray<FGGPONetworkStats> Result;
     for (int i = 0; i < Count; i++)
     {
