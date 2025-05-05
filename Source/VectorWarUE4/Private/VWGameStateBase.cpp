@@ -54,7 +54,7 @@ void AVWGameStateBase::BeginPlay()
     }
     else
     {
-        UE_LOG(LogTemp, Error, TEXT("Failed to create GGPO session"));
+        GGPONet::ggpo_log(ggpo, "Failed to create GGPO session");
     }
 }
 
@@ -372,7 +372,7 @@ bool AVWGameStateBase::TryStartGGPOPlayerSession(
 
     VectorWar_Init(LocalPort, NumPlayers, Players, NumSpectators);
 
-    UE_LOG(LogTemp, Display, TEXT("GGPO session started"));
+    GGPONet::ggpo_log(ggpo, "GGPO session started");
 
     return true;
 }
@@ -390,7 +390,7 @@ bool AVWGameStateBase::TryStartGGPOSpectatorSession(
 
     VectorWar_InitSpectator(LocalPort, NumPlayers, HostIp, HostPort);
 
-    UE_LOG(LogTemp, Display, TEXT("GGPO spectator session started"));
+    GGPONet::ggpo_log(ggpo, "GGPO spectator session started");
 
     return true;
 }
