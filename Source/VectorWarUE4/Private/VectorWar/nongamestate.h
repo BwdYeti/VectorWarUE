@@ -58,6 +58,7 @@ struct NonGameState {
    GGPOPlayerHandle     local_player_handle;
    FPlayerConnectionInfo players[MAX_PLAYERS];
    int                  num_players;
+   bool                 spectator;
 
    ChecksumInfo         now;
    ChecksumInfo         periodic;

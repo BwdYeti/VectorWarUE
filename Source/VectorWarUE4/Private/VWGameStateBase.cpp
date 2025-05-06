@@ -11,6 +11,8 @@
 // Because of how it's coded, the original VectorWar runs at 62 fps, not 60
 #define FRAME_RATE 62
 #define ONE_FRAME (1.0f / FRAME_RATE)
+// How many times TickGameState() can be called during Tick()
+#define MAX_UPDATES_PER_TICK 30
 
 void AVWGameStateBase::BeginPlay()
 {
@@ -26,12 +28,19 @@ void AVWGameStateBase::BeginPlay()
     {
         // Get the network addresses
         NetworkAddresses = GgpoGameInstance->NetworkAddresses;
-        NumPlayers = NetworkAddresses->NumPlayers();
+        NumPlayers = NetworkAddresses->GetNumPlayers();
         // Reset the game instance network addresses
         GgpoGameInstance->NetworkAddresses = nullptr;
     }
 
-    bSessionStarted = TryStartGGPOPlayerSession(NumPlayers, NetworkAddresses);
+    if (NetworkAddresses->IsSpectator())
+    {
+        bSessionStarted = TryStartGGPOSpectatorSession(NumPlayers, NetworkAddresses);
+    }
+    else
+    {
+        bSessionStarted = TryStartGGPOPlayerSession(NumPlayers, NetworkAddresses);
+    }
 
     if (bSessionStarted)
     {
@@ -47,7 +56,7 @@ void AVWGameStateBase::BeginPlay()
     }
     else
     {
-        UE_LOG(LogTemp, Error, TEXT("Failed to create GGPO session"));
+        GGPONet::ggpo_log(ggpo, "Failed to create GGPO session");
     }
 }
 
@@ -59,17 +68,33 @@ void AVWGameStateBase::Tick(float DeltaSeconds)
 
     ElapsedTime += DeltaSeconds;
 
-    while (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE)) {
-        TranslateMessage(&msg);
-        DispatchMessage(&msg);
-        if (msg.message == WM_QUIT) { }
+    int TicksAhead = 0;
+    TArray<FGGPONetworkStats> NetworkStats = UpdateNetworkStats();
+    if (ngs.spectator)
+    {
+        // Ticks behind the host
+        TicksAhead = -NetworkStats[0].timesync.local_frames_behind;
     }
-    int32 IdleMs = (int32)(ONE_FRAME - (int32)(ElapsedTime * 1000));
+
+    float TickDuration = GetTickDuration(TicksAhead);
+
+    // Milliseconds of idle time before the next game state tick
+    // Less than or equal to zero if the update is happening during this tick
+    int32 IdleMs = (int32)((TickDuration - ElapsedTime) * 1000);
+    // Process GGPO background actions (synching, etc)
     VectorWar_Idle(FMath::Max(0, IdleMs - 1));
-    while (ElapsedTime >= ONE_FRAME) {
+    // If the elasped time is at least one frame
+    // Update at most MAX_UPDATES_PER_TICK ticks
+    for(int i = 0; i < MAX_UPDATES_PER_TICK && ElapsedTime >= TickDuration; i++)
+    {
+        // Tick one frame of gameplay
         TickGameState();
 
-        ElapsedTime -= ONE_FRAME;
+        // Then reduce the elapsed time
+        ElapsedTime -= TickDuration;
+
+        TicksAhead++;
+        TickDuration = GetTickDuration(TicksAhead);
     }
 }
 
@@ -149,11 +174,8 @@ const NonGameState AVWGameStateBase::GetNonGameState() const
     return ngs;
 }
 
-void AVWGameStateBase::TickGameState()
+TArray<FGGPONetworkStats> AVWGameStateBase::UpdateNetworkStats()
 {
-    int32 Input = GetLocalInputs();
-    VectorWar_RunFrame(Input);
-
     // Network data
     TArray<FGGPONetworkStats> Network = VectorWar_GetNetworkStats();
     for (int32 i = 0; i < NetworkGraphData.Num(); i++)
@@ -192,6 +214,37 @@ void AVWGameStateBase::TickGameState()
             PlayerData->RemoveAt(0);
         }
     }
+
+    return Network;
+}
+
+float AVWGameStateBase::GetTickDuration(int TicksAhead) const
+{
+    float TickDuration = ONE_FRAME;
+    // If behind, speed up to catch up
+    // Only spectators will be behind; players should run at full speed,
+    // or slow down for remote players
+    if (TicksAhead <= -30)
+    {
+        // Shrink the tick duration to run the simulation slightly faster and catch up
+		// Lerp between 1.6x speed and 1.075x speed, from 120f behind to 30f behind
+        constexpr float MinAlpha = 30.f;
+        constexpr float MaxAlpha = 180.f - MinAlpha;
+
+        float SpeedUpAlpha = FMath::Clamp((-TicksAhead) - MinAlpha, 0.f, MaxAlpha) / MaxAlpha;
+        constexpr float MostStretchingFactor = 1 / 1.6f;
+        constexpr float LeastStretchingFactor = 1 / 1.075f;
+        float SpeedUpMult = FMath::Lerp(LeastStretchingFactor, MostStretchingFactor, SpeedUpAlpha);
+        TickDuration *= SpeedUpMult;
+    }
+
+    return TickDuration;
+}
+
+void AVWGameStateBase::TickGameState()
+{
+    int32 Input = GetLocalInputs();
+    VectorWar_RunFrame(Input);
 }
 
 int32 AVWGameStateBase::GetLocalInputs()
@@ -288,19 +341,30 @@ void AVWGameStateBase::VectorWar_DisconnectPlayer(int32 player)
 
 TArray<FGGPONetworkStats> AVWGameStateBase::VectorWar_GetNetworkStats()
 {
-    GGPOPlayerHandle RemoteHandles[MAX_PLAYERS];
-    int Count = 0;
-    for (int i = 0; i < ngs.num_players; i++) {
-        if (ngs.players[i].type == EGGPOPlayerType::REMOTE) {
-            RemoteHandles[Count++] = ngs.players[i].handle;
+    TArray<FGGPONetworkStats> Result;
+    if (!ngs.spectator)
+    {
+        // Get the handles for the remote players
+        GGPOPlayerHandle RemoteHandles[MAX_PLAYERS];
+        int Count = 0;
+        for (int i = 0; i < ngs.num_players; i++) {
+            if (ngs.players[i].type == EGGPOPlayerType::REMOTE) {
+                RemoteHandles[Count++] = ngs.players[i].handle;
+            }
+        }
+
+        // Pull network stats for only the remote players
+        for (int i = 0; i < Count; i++)
+        {
+            FGGPONetworkStats Stats = { 0 };
+            GGPONet::ggpo_get_network_stats(ggpo, RemoteHandles[i], &Stats);
+            Result.Add(Stats);
         }
     }
-
-    TArray<FGGPONetworkStats> Result;
-    for (int i = 0; i < Count; i++)
+    else
     {
         FGGPONetworkStats Stats = { 0 };
-        GGPONet::ggpo_get_network_stats(ggpo, RemoteHandles[i], &Stats);
+        GGPONet::ggpo_get_network_stats(ggpo, 0, &Stats);
         Result.Add(Stats);
     }
 
@@ -311,13 +375,12 @@ bool AVWGameStateBase::TryStartGGPOPlayerSession(
     int32 NumPlayers,
     const UGGPONetwork* NetworkAddresses)
 {
-    int32 Offset = 0;
     GGPOPlayer Players[GGPO_MAX_SPECTATORS + GGPO_MAX_PLAYERS];
     int32 NumSpectators = 0;
 
     uint16 LocalPort;
 
-    // If there are no 
+    // If there are no remote players, this is a local session
     if (NetworkAddresses == nullptr)
     {
         Players[0].size = sizeof(Players[0]);
@@ -329,67 +392,62 @@ bool AVWGameStateBase::TryStartGGPOPlayerSession(
     }
     else
     {
-        if (NumPlayers > NetworkAddresses->NumPlayers())
+        if (NumPlayers > NetworkAddresses->NumAddresses())
             return false;
 
         LocalPort = NetworkAddresses->GetLocalPort();
 
-        int32 i;
-        for (i = 0; i < NumPlayers; i++)
+        for (int32 i = 0; i < NumPlayers; i++)
         {
-            Offset++;
+            auto& Player = Players[i];
 
-            Players[i].size = sizeof(Players[i]);
-            Players[i].player_num = i + 1;
+            Player.size = sizeof(GGPOPlayer);
+            Player.player_num = i + 1;
             // The local player
-            if (i == NetworkAddresses->GetPlayerIndex()) {
-                Players[i].type = EGGPOPlayerType::LOCAL;
-                continue;
+            if (i == NetworkAddresses->GetLocalPlayerIndex())
+            {
+                Player.type = EGGPOPlayerType::LOCAL;
             }
-
-            Players[i].type = EGGPOPlayerType::REMOTE;
-            Players[i].u.remote.port = (uint16)NetworkAddresses->GetAddress(i)->GetPort();
-            NetworkAddresses->GetAddress(i)->GetIpAddress(Players[i].u.remote.ip_address);
+            else
+            {
+                Player.type = EGGPOPlayerType::REMOTE;
+                Player.u.remote.port = (uint16)NetworkAddresses->GetAddress(i)->GetPort();
+                NetworkAddresses->GetAddress(i)->GetIpAddress(Player.u.remote.ip_address);
+            }
         }
-        // these are spectators...
-        while (Offset < NetworkAddresses->NumPlayers()) {
-            Offset++;
+        for (int32 i = 0; i < NetworkAddresses->NumSpectators(); i++)
+        {
+            auto& Spectator = Players[NumPlayers + i];
 
-            Players[i].type = EGGPOPlayerType::SPECTATOR;
-            Players[i].u.remote.port = (uint16)NetworkAddresses->GetAddress(i)->GetPort();
-            NetworkAddresses->GetAddress(i)->GetIpAddress(Players[i].u.remote.ip_address);
+            Spectator.type = EGGPOPlayerType::SPECTATOR;
+            Spectator.u.remote.port = (uint16)NetworkAddresses->GetSpectator(i)->GetPort();
+            NetworkAddresses->GetSpectator(i)->GetIpAddress(Spectator.u.remote.ip_address);
 
-            i++;
             NumSpectators++;
         }
     }
 
     VectorWar_Init(LocalPort, NumPlayers, Players, NumSpectators);
 
-    UE_LOG(LogTemp, Display, TEXT("GGPO session started"));
+    GGPONet::ggpo_log(ggpo, "GGPO session started");
 
     return true;
 }
 
 bool AVWGameStateBase::TryStartGGPOSpectatorSession(
-    const uint16 LocalPort,
     const int32 NumPlayers,
-    wchar_t* HostParameter)
+    const UGGPONetwork* NetworkAddresses)
 {
-    int32 Offset = 0;
-    wchar_t WideIpBuffer[128];
-    uint32 WideIpBufferSize = (uint32)ARRAYSIZE(WideIpBuffer);
+    char HostIp[32];
+    auto Host = NetworkAddresses->GetAddress(0);
+    uint16 HostPort = Host->GetPort();
+    Host->GetIpAddress(HostIp);
 
-    char HostIp[128];
-    uint16 HostPort;
-    if (swscanf_s(HostParameter, L"%[^:]:%hu", WideIpBuffer, WideIpBufferSize, &HostPort) != 2) {
-        return 1;
-    }
-    wcstombs_s(nullptr, HostIp, ARRAYSIZE(HostIp), WideIpBuffer, _TRUNCATE);
+    uint16 LocalPort = NetworkAddresses->GetLocalPort();
 
     VectorWar_InitSpectator(LocalPort, NumPlayers, HostIp, HostPort);
 
-    UE_LOG(LogTemp, Display, TEXT("GGPO spectator session started"));
+    GGPONet::ggpo_log(ggpo, "GGPO spectator session started");
 
     return true;
 }
@@ -401,6 +459,7 @@ void AVWGameStateBase::VectorWar_Init(uint16 localport, int32 num_players, GGPOP
     // Initialize the game state
     gs.Init(num_players);
     ngs.num_players = num_players;
+    ngs.spectator = false;
 
     // Fill in a ggpo callbacks structure to pass to start_session.
     GGPOSessionCallbacks cb = CreateCallbacks();
@@ -417,8 +476,9 @@ void AVWGameStateBase::VectorWar_Init(uint16 localport, int32 num_players, GGPOP
     GGPONet::ggpo_set_disconnect_timeout(ggpo, 3000);
     GGPONet::ggpo_set_disconnect_notify_start(ggpo, 1000);
 
-    int i;
-    for (i = 0; i < num_players + num_spectators; i++) {
+    // Players
+    for (int i = 0; i < num_players; i++)
+    {
         GGPOPlayerHandle handle;
         result = GGPONet::ggpo_add_player(ggpo, players + i, &handle);
         ngs.players[i].handle = handle;
@@ -433,6 +493,12 @@ void AVWGameStateBase::VectorWar_Init(uint16 localport, int32 num_players, GGPOP
             ngs.players[i].connect_progress = 0;
         }
     }
+    // Spectators
+    for (int i = num_players; i < num_players + num_spectators; i++)
+    {
+        GGPOPlayerHandle handle;
+        result = GGPONet::ggpo_add_player(ggpo, players + i, &handle);
+    }
 
     GGPONet::ggpo_try_synchronize_local(ggpo);
 }
@@ -443,11 +509,17 @@ void AVWGameStateBase::VectorWar_InitSpectator(uint16 localport, int32 num_playe
     // Initialize the game state
     gs.Init(num_players);
     ngs.num_players = num_players;
+    ngs.spectator = true;
 
     // Fill in a ggpo callbacks structure to pass to start_session.
     GGPOSessionCallbacks cb = CreateCallbacks();
 
     result = GGPONet::ggpo_start_spectating(&ggpo, &cb, "vectorwar", num_players, sizeof(int), localport, host_ip, host_port);
+
+    for (int i = 0; i < num_players; i++) {
+        ngs.players[i].type = EGGPOPlayerType::REMOTE;
+        ngs.players[i].connect_progress = 0;
+    }
 }
 
 GGPOSessionCallbacks AVWGameStateBase::CreateCallbacks()
