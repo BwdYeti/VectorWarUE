@@ -11,6 +11,7 @@ Saved/
 
 .vscode
 .vs
+.vsconfig
 *.VC.db
 *.log
 *.opensdf

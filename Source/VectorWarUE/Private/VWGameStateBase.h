@@ -133,9 +133,9 @@ private:
 
 
 	/** Starts a GGPO game session. */
-	bool TryStartGGPOPlayerSession(int32 NumPlayers, const UGGPONetwork* NetworkAddresses);
+	bool TryStartGGPOPlayerSession(int32 NumPlayers, const TObjectPtr<UGGPONetwork> NetworkAddresses);
 	/** Starts a GGPO spectating game session. */
-	bool TryStartGGPOSpectatorSession(const int32 NumPlayers, const UGGPONetwork* NetworkAddresses);
+	bool TryStartGGPOSpectatorSession(const int32 NumPlayers, const TObjectPtr<UGGPONetwork> NetworkAddresses);
 
     /*
      * VectorWar_Init --
