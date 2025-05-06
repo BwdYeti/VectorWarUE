@@ -68,22 +68,33 @@ void AVWGameStateBase::Tick(float DeltaSeconds)
 
     ElapsedTime += DeltaSeconds;
 
+    int TicksAhead = 0;
     TArray<FGGPONetworkStats> NetworkStats = UpdateNetworkStats();
+    if (ngs.spectator)
+    {
+        // Ticks behind the host
+        TicksAhead = -NetworkStats[0].timesync.local_frames_behind;
+    }
+
+    float TickDuration = GetTickDuration(TicksAhead);
 
     // Milliseconds of idle time before the next game state tick
     // Less than or equal to zero if the update is happening during this tick
-    int32 IdleMs = (int32)((ONE_FRAME - ElapsedTime) * 1000);
+    int32 IdleMs = (int32)((TickDuration - ElapsedTime) * 1000);
     // Process GGPO background actions (synching, etc)
     VectorWar_Idle(FMath::Max(0, IdleMs - 1));
     // If the elasped time is at least one frame
     // Update at most MAX_UPDATES_PER_TICK ticks
-    for(int i = 0; i < MAX_UPDATES_PER_TICK && ElapsedTime >= ONE_FRAME; i++)
+    for(int i = 0; i < MAX_UPDATES_PER_TICK && ElapsedTime >= TickDuration; i++)
     {
         // Tick one frame of gameplay
         TickGameState();
 
         // Then reduce the elapsed time
-        ElapsedTime -= ONE_FRAME;
+        ElapsedTime -= TickDuration;
+
+        TicksAhead++;
+        TickDuration = GetTickDuration(TicksAhead);
     }
 }
 
@@ -205,6 +216,29 @@ TArray<FGGPONetworkStats> AVWGameStateBase::UpdateNetworkStats()
     }
 
     return Network;
+}
+
+float AVWGameStateBase::GetTickDuration(int TicksAhead) const
+{
+    float TickDuration = ONE_FRAME;
+    // If behind, speed up to catch up
+    // Only spectators will be behind; players should run at full speed,
+    // or slow down for remote players
+    if (TicksAhead <= -30)
+    {
+        // Shrink the tick duration to run the simulation slightly faster and catch up
+		// Lerp between 1.6x speed and 1.075x speed, from 120f behind to 30f behind
+        constexpr float MinAlpha = 30.f;
+        constexpr float MaxAlpha = 180.f - MinAlpha;
+
+        float SpeedUpAlpha = FMath::Clamp((-TicksAhead) - MinAlpha, 0.f, MaxAlpha) / MaxAlpha;
+        constexpr float MostStretchingFactor = 1 / 1.6f;
+        constexpr float LeastStretchingFactor = 1 / 1.075f;
+        float SpeedUpMult = FMath::Lerp(LeastStretchingFactor, MostStretchingFactor, SpeedUpAlpha);
+        TickDuration *= SpeedUpMult;
+    }
+
+    return TickDuration;
 }
 
 void AVWGameStateBase::TickGameState()

@@ -91,6 +91,8 @@ public:
 private:
     TArray<FGGPONetworkStats> UpdateNetworkStats();
 
+    float GetTickDuration(int TicksAhead) const;
+
 	void TickGameState();
 
 	/** Gets the inputs from the local player. */
