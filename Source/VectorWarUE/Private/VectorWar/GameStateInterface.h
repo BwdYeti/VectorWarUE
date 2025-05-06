@@ -15,7 +15,7 @@ class AVWGameStateBase;
  * 
  */
 UCLASS()
-class VECTORWARUE4_API UGameStateInterface : public UBlueprintFunctionLibrary
+class VECTORWARUE_API UGameStateInterface : public UBlueprintFunctionLibrary
 {
 	GENERATED_BODY()
 

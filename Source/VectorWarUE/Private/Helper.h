@@ -10,7 +10,7 @@
  * 
  */
 UCLASS()
-class VECTORWARUE4_API UHelper : public UBlueprintFunctionLibrary
+class VECTORWARUE_API UHelper : public UBlueprintFunctionLibrary
 {
 	GENERATED_BODY()
 

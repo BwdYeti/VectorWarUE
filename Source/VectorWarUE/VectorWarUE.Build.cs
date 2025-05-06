@@ -2,15 +2,15 @@
 
 using UnrealBuildTool;
 
-public class VectorWarUE4 : ModuleRules
+public class VectorWarUE : ModuleRules
 {
-	public VectorWarUE4(ReadOnlyTargetRules Target) : base(Target)
+	public VectorWarUE(ReadOnlyTargetRules Target) : base(Target)
 	{
 		PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
 	
 		PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine", "InputCore" });
 
-		PrivateDependencyModuleNames.AddRange(new string[] { "GGPOUE4" });
+		PrivateDependencyModuleNames.AddRange(new string[] { "GGPOUE" });
 
 		// Uncomment if you are using Slate UI
 		// PrivateDependencyModuleNames.AddRange(new string[] { "Slate", "SlateCore" });
