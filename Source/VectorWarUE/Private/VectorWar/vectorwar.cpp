@@ -6,7 +6,7 @@
 #include <stdio.h>
 #include "gamestate.h"
 
-// UE4: allow Windows platform types to avoid naming collisions
+// UE: allow Windows platform types; to avoid naming collisions
 //  this must be undone at the bottom of this file
 #include "Windows/AllowWindowsPlatformTypes.h"
 #include "Windows/prewindowsapi.h"
@@ -48,7 +48,7 @@ uint32 get_time()
     return timeGetTime();
 }
 
-// UE4: disallow windows platform types
+// UE: disallow windows platform types
 //  this was enabled at the top of the file
 #include "Windows/PostWindowsApi.h"
 #include "Windows/HideWindowsPlatformTypes.h"
