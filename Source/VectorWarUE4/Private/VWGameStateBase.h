@@ -89,6 +89,8 @@ public:
     const NonGameState GetNonGameState() const;
 
 private:
+    TArray<FGGPONetworkStats> UpdateNetworkStats();
+
 	void TickGameState();
 
 	/** Gets the inputs from the local player. */

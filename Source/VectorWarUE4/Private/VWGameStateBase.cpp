@@ -11,6 +11,8 @@
 // Because of how it's coded, the original VectorWar runs at 62 fps, not 60
 #define FRAME_RATE 62
 #define ONE_FRAME (1.0f / FRAME_RATE)
+// How many times TickGameState() can be called during Tick()
+#define MAX_UPDATES_PER_TICK 30
 
 void AVWGameStateBase::BeginPlay()
 {
@@ -66,13 +68,17 @@ void AVWGameStateBase::Tick(float DeltaSeconds)
 
     ElapsedTime += DeltaSeconds;
 
+    TArray<FGGPONetworkStats> NetworkStats = UpdateNetworkStats();
+
     // Milliseconds of idle time before the next game state tick
     // Less than or equal to zero if the update is happening during this tick
     int32 IdleMs = (int32)((ONE_FRAME - ElapsedTime) * 1000);
     // Process GGPO background actions (synching, etc)
     VectorWar_Idle(FMath::Max(0, IdleMs - 1));
     // If the elasped time is at least one frame
-    while (ElapsedTime >= ONE_FRAME) {
+    // Update at most MAX_UPDATES_PER_TICK ticks
+    for(int i = 0; i < MAX_UPDATES_PER_TICK && ElapsedTime >= ONE_FRAME; i++)
+    {
         // Tick one frame of gameplay
         TickGameState();
 
@@ -157,11 +163,8 @@ const NonGameState AVWGameStateBase::GetNonGameState() const
     return ngs;
 }
 
-void AVWGameStateBase::TickGameState()
+TArray<FGGPONetworkStats> AVWGameStateBase::UpdateNetworkStats()
 {
-    int32 Input = GetLocalInputs();
-    VectorWar_RunFrame(Input);
-
     // Network data
     TArray<FGGPONetworkStats> Network = VectorWar_GetNetworkStats();
     for (int32 i = 0; i < NetworkGraphData.Num(); i++)
@@ -200,6 +203,14 @@ void AVWGameStateBase::TickGameState()
             PlayerData->RemoveAt(0);
         }
     }
+
+    return Network;
+}
+
+void AVWGameStateBase::TickGameState()
+{
+    int32 Input = GetLocalInputs();
+    VectorWar_RunFrame(Input);
 }
 
 int32 AVWGameStateBase::GetLocalInputs()
@@ -296,21 +307,30 @@ void AVWGameStateBase::VectorWar_DisconnectPlayer(int32 player)
 
 TArray<FGGPONetworkStats> AVWGameStateBase::VectorWar_GetNetworkStats()
 {
-    // Get the handles for the remote players
-    GGPOPlayerHandle RemoteHandles[MAX_PLAYERS];
-    int Count = 0;
-    for (int i = 0; i < ngs.num_players; i++) {
-        if (ngs.players[i].type == EGGPOPlayerType::REMOTE) {
-            RemoteHandles[Count++] = ngs.players[i].handle;
+    TArray<FGGPONetworkStats> Result;
+    if (!ngs.spectator)
+    {
+        // Get the handles for the remote players
+        GGPOPlayerHandle RemoteHandles[MAX_PLAYERS];
+        int Count = 0;
+        for (int i = 0; i < ngs.num_players; i++) {
+            if (ngs.players[i].type == EGGPOPlayerType::REMOTE) {
+                RemoteHandles[Count++] = ngs.players[i].handle;
+            }
+        }
+
+        // Pull network stats for only the remote players
+        for (int i = 0; i < Count; i++)
+        {
+            FGGPONetworkStats Stats = { 0 };
+            GGPONet::ggpo_get_network_stats(ggpo, RemoteHandles[i], &Stats);
+            Result.Add(Stats);
         }
     }
-
-    // Pull network stats for only the remote players
-    TArray<FGGPONetworkStats> Result;
-    for (int i = 0; i < Count; i++)
+    else
     {
         FGGPONetworkStats Stats = { 0 };
-        GGPONet::ggpo_get_network_stats(ggpo, RemoteHandles[i], &Stats);
+        GGPONet::ggpo_get_network_stats(ggpo, 0, &Stats);
         Result.Add(Stats);
     }
 
@@ -405,6 +425,7 @@ void AVWGameStateBase::VectorWar_Init(uint16 localport, int32 num_players, GGPOP
     // Initialize the game state
     gs.Init(num_players);
     ngs.num_players = num_players;
+    ngs.spectator = false;
 
     // Fill in a ggpo callbacks structure to pass to start_session.
     GGPOSessionCallbacks cb = CreateCallbacks();
@@ -454,6 +475,7 @@ void AVWGameStateBase::VectorWar_InitSpectator(uint16 localport, int32 num_playe
     // Initialize the game state
     gs.Init(num_players);
     ngs.num_players = num_players;
+    ngs.spectator = true;
 
     // Fill in a ggpo callbacks structure to pass to start_session.
     GGPOSessionCallbacks cb = CreateCallbacks();
