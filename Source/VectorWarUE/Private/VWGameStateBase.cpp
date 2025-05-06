@@ -18,7 +18,7 @@ void AVWGameStateBase::BeginPlay()
 {
     Super::BeginPlay();
 
-    UGGPONetwork* NetworkAddresses = nullptr;
+    TObjectPtr<UGGPONetwork> NetworkAddresses = nullptr;
     int32 NumPlayers = 1;
 
     // If this is a GGPO game instance
@@ -373,7 +373,7 @@ TArray<FGGPONetworkStats> AVWGameStateBase::VectorWar_GetNetworkStats()
 
 bool AVWGameStateBase::TryStartGGPOPlayerSession(
     int32 NumPlayers,
-    const UGGPONetwork* NetworkAddresses)
+    const TObjectPtr<UGGPONetwork> NetworkAddresses)
 {
     GGPOPlayer Players[GGPO_MAX_SPECTATORS + GGPO_MAX_PLAYERS];
     int32 NumSpectators = 0;
@@ -436,7 +436,7 @@ bool AVWGameStateBase::TryStartGGPOPlayerSession(
 
 bool AVWGameStateBase::TryStartGGPOSpectatorSession(
     const int32 NumPlayers,
-    const UGGPONetwork* NetworkAddresses)
+    const TObjectPtr<UGGPONetwork> NetworkAddresses)
 {
     char HostIp[32];
     auto Host = NetworkAddresses->GetAddress(0);
